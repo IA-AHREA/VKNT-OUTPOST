@@ -18,6 +18,10 @@ module.exports = {
         if (interaction.options.getSubcommand() === 'piloto') {
             const user = interaction.options.getUser('usuario');
             
+                    // ESPÍA #2: Ver las variables al ejecutar un comando
+            console.log(`[Comando /deuda] Intentando usar la DB con el host: ${process.env.MYSQLHOST}`);
+
+
             await interaction.deferReply({ ephemeral: true }); // Efímero para no spamear el canal
             const connection = await pool.getConnection();
 

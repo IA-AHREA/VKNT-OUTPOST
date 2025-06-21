@@ -45,15 +45,25 @@ client.once(Events.ClientReady, () => {
 client.on(Events.InteractionCreate, async interaction => {
 
     // 1. Manejador de Slash Commands (este ya lo tenías)
-    if (interaction.isChatInputCommand()) {
+   if (interaction.isChatInputCommand()) {
         const command = client.commands.get(interaction.commandName);
         if (!command) return;
 
         try {
             await command.execute(interaction);
         } catch (error) {
-            console.error(error);
-            await interaction.reply({ content: 'Hubo un error al ejecutar este comando.', flags: [InteractionResponseFlags.Ephemeral] });
+            console.error("Error ejecutando un comando:", error); // Log más descriptivo
+            
+            // Bloque catch más seguro para responder
+            try {
+                if (interaction.replied || interaction.deferred) {
+                    await interaction.followUp({ content: 'Hubo un error terrible al ejecutar este comando.', ephemeral: true });
+                } else {
+                    await interaction.reply({ content: 'Hubo un error terrible al ejecutar este comando.', ephemeral: true });
+                }
+            } catch (replyError) {
+                console.error("Error al intentar enviar mensaje de error:", replyError);
+            }
         }
     }
 
