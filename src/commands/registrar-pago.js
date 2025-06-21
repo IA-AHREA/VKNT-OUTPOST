@@ -1,15 +1,25 @@
-// src/commands/registrar-pago.js
-const { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+// src/commands/registrar-pago.js (versión inteligente)
+
+// Importaciones necesarias para el Modal y los menús
+const {
+    SlashCommandBuilder,
+    ActionRowBuilder,
+    StringSelectMenuBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
+} = require('discord.js');
 const pool = require('../db/database');
 
-// Función de ayuda para crear el menú
+// La función para crear el menú se queda igual
 async function createPilotMenu(page = 0) {
     const connection = await pool.getConnection();
-    const limit = 25; // Límite de Discord por menú
+    const limit = 25;
     const offset = page * limit;
 
     try {
-        // Obtener pilotos con deuda
         const [pilots] = await connection.query(
             `SELECT p.id, p.nombre_discord, SUM(o.deuda_isk) as total_deuda
              FROM pilots p
@@ -23,7 +33,7 @@ async function createPilotMenu(page = 0) {
         );
 
         if (pilots.length === 0 && page === 0) {
-            return { content: 'No hay pilotos con deudas pendientes.', components: [] };
+            return { content: 'No hay pilotos con deudas pendientes.', components: [], ephemeral: true };
         }
         
         const selectMenu = new StringSelectMenuBuilder()
@@ -63,14 +73,56 @@ async function createPilotMenu(page = 0) {
     }
 }
 
-
+// El export principal del comando
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('registrar-pago')
-        .setDescription('Inicia el proceso para registrar el pago de un piloto.'),
+        .setDescription('Registra un pago. Especifica un piloto o mira el menú interactivo.')
+        .addUserOption(option => // La opción de usuario ahora es OPCIONAL
+            option.setName('piloto')
+                .setDescription('El piloto al que quieres registrarle un pago directamente.')
+                .setRequired(false)), // <-- La clave es que ya no es requerido
+
     async execute(interaction) {
-        const menu = await createPilotMenu();
-        await interaction.reply(menu);
+        const pilotoSeleccionado = interaction.options.getUser('piloto');
+
+        // CASO 1: Se especificó un piloto en el comando
+        if (pilotoSeleccionado) {
+            const connection = await pool.getConnection();
+            try {
+                const [pilots] = await connection.execute('SELECT id FROM pilots WHERE discord_id = ?', [pilotoSeleccionado.id]);
+
+                if (pilots.length === 0) {
+                    await interaction.reply({ content: 'Este piloto no está registrado en la base de datos.', ephemeral: true });
+                    return;
+                }
+                const pilotId = pilots[0].id;
+
+                // Creamos y mostramos el modal directamente
+                const modal = new ModalBuilder()
+                    .setCustomId(`payment_modal_${pilotId}`)
+                    .setTitle(`Registrar Pago para ${pilotoSeleccionado.username}`);
+
+                const amountInput = new TextInputBuilder()
+                    .setCustomId('payment_amount')
+                    .setLabel("Monto a abonar (en millones ISK)")
+                    .setStyle(TextInputStyle.Short)
+                    .setPlaceholder('Ej: 150.5')
+                    .setRequired(true);
+
+                modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
+                await interaction.showModal(modal);
+
+            } finally {
+                connection.release();
+            }
+        } 
+        // CASO 2: No se especificó un piloto, mostramos el menú
+        else {
+            const menu = await createPilotMenu();
+            await interaction.reply(menu);
+        }
     },
-    createPilotMenu // Exportamos la función para usarla en el listener de interacciones
+    // Exportamos la función para que el listener de paginación en index.js siga funcionando
+    createPilotMenu
 };
