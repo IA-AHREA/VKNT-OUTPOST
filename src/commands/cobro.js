@@ -21,12 +21,12 @@ module.exports = {
             }
             
             // 2. Sumar la tarifa a la deuda de cada outpost
-            const [result] = await connection.execute(
-                'UPDATE outposts SET deuda_isk = deuda_isk + ?',
+           const [result] = await connection.execute(
+                'UPDATE outposts SET saldo_isk = saldo_isk - ?', // <-- La nueva lógica
                 [tarifa]
-            );
+            );  
 
-            await interaction.editReply(`✅ Cobro mensual de **${tarifa} millones ISK** aplicado a **${result.affectedRows}** outposts.`);
+           await interaction.editReply(`✅ Cobro mensual de **${tarifa} millones ISK** aplicado. El saldo de **${result.affectedRows}** outposts ha sido ajustado.`);
         } catch (error) {
             console.error(error);
             await interaction.editReply('Hubo un error al procesar el cobro mensual.');

@@ -10,28 +10,22 @@ module.exports = {
         await interaction.deferReply();
         const connection = await pool.getConnection();
         try {
-            const [deudas] = await connection.query(
-                `SELECT 
-                    p.nombre_discord, 
-                    o.nombre_outpost,
-                    o.ubicacion,
-                    o.deuda_isk
-                 FROM pilots p
-                 JOIN outposts o ON p.id = o.pilot_id
-                 WHERE o.deuda_isk > 0
-                 ORDER BY p.nombre_discord, o.deuda_isk DESC`
-            );
+           const [saldos] = await connection.query(
+                `SELECT p.nombre_discord, o.nombre_outpost, o.ubicacion, o.saldo_isk
+                FROM pilots p JOIN outposts o ON p.id = o.pilot_id
+                WHERE o.saldo_isk < 0 ORDER BY p.nombre_discord, o.saldo_isk ASC`
+            );  
 
-            if (deudas.length === 0) {
+            if (saldos.length === 0) {
                 await interaction.editReply('🎉 ¡Felicidades! No hay ninguna deuda pendiente en el sistema.');
                 return;
             }
 
             // Calculamos el total de la corporación sumando todas las deudas en la lista
-            const totalCorporacion = deudas.reduce((acc, outpost) => acc + parseFloat(outpost.deuda_isk), 0);
+            const totalPendiente  = saldo.reduce((acc, op) => acc + parseFloat(op.saldo_isk), 0);
 
             const embed = new EmbedBuilder()
-                .setTitle('📄 Reporte de Deudas por Outpost')
+                .setTitle('📄 Reporte de Saldos Deudores')
                 .setColor(0xFF0000) // Rojo
                 .setTimestamp();
 
@@ -42,14 +36,14 @@ module.exports = {
                     pilotoActual = d.nombre_discord;
                     description += `\n**Piloto: ${pilotoActual}**\n`;
                 }
-                description += `— ${d.nombre_outpost} (${d.ubicacion}): **${parseFloat(d.deuda_isk).toFixed(2)}M ISK**\n`;
+                description += `— <span class="math-inline">\{d\.nombre\_outpost\} \(</span>{d.ubicacion}): **${Math.abs(d.saldo_isk).toFixed(2)}M ISK**\n`;
             });
             embed.setDescription(description);
 
             // AÑADIMOS EL CAMPO CON EL TOTAL GENERAL
             embed.addFields({
-                name: 'Deuda Total de la Corporación',
-                value: `**${totalCorporacion.toFixed(2)} millones ISK**`
+                name: 'Saldo Pendiente Total',
+                value: `**${Math.abs(totalPendiente).toFixed(2)} millones ISK**`
             });
             
             embed.setFooter({ text: `Generado por ${interaction.client.user.username}` });

@@ -116,24 +116,37 @@ client.on(Events.InteractionCreate, async interaction => {
             try {
                 // Lógica de pago: aplicar el monto a las deudas del piloto.
                 // Esta es una lógica simple: paga la deuda más antigua primero.
-                let remainingAmount = amountPaid;
-                const [outposts] = await connection.execute(
-                    'SELECT id, deuda_isk FROM outposts WHERE pilot_id = ? AND deuda_isk > 0 ORDER BY fecha_registro ASC',
-                    [pilotId]
-                );
+             // Nueva lógica de pago (versión "saldo"):
+            let remainingAmount = amountPaid;
+            const [outposts] = await connection.execute(
+                'SELECT id, saldo_isk FROM outposts WHERE pilot_id = ? AND saldo_isk < 0 ORDER BY saldo_isk ASC', // Obtenemos solo los que deben
+                [pilotId]
+            );
 
+            // Si no hay deudas, el pago se convierte en saldo a favor en el primer outpost
+            if (outposts.length === 0) {
+                const [anyOutpost] = await connection.execute('SELECT id FROM outposts WHERE pilot_id = ? LIMIT 1', [pilotId]);
+                if (anyOutpost.length > 0) {
+                    await connection.execute('UPDATE outposts SET saldo_isk = saldo_isk + ? WHERE id = ?', [amountPaid, anyOutpost[0].id]);
+                }
+            } else {
+                // Si hay deudas, las pagamos
                 for (const outpost of outposts) {
                     if (remainingAmount <= 0) break;
-
-                    const paymentForThisOutpost = Math.min(remainingAmount, outpost.deuda_isk);
-                    const newDebt = outpost.deuda_isk - paymentForThisOutpost;
-                    
-                    await connection.execute('UPDATE outposts SET deuda_isk = ? WHERE id = ?', [newDebt, outpost.id]);
-                    
+                    const debtToPay = Math.abs(outpost.saldo_isk); // La deuda es el valor absoluto del saldo negativo
+                    const paymentForThisOutpost = Math.min(remainingAmount, debtToPay);
+                    const newBalance = outpost.saldo_isk + paymentForThisOutpost;
+                    await connection.execute('UPDATE outposts SET saldo_isk = ? WHERE id = ?', [newBalance, outpost.id]);
                     remainingAmount -= paymentForThisOutpost;
                 }
+                // Si sobra dinero después de pagar todo, se añade al último outpost pagado
+                if (remainingAmount > 0) {
+                    const lastPaidOutpostId = outposts[outposts.length - 1].id;
+                    await connection.execute('UPDATE outposts SET saldo_isk = saldo_isk + ? WHERE id = ?', [remainingAmount, lastPaidOutpostId]);
+                }
+            }
                 
-                await interaction.editReply(`✅ Pago de **${amountPaid.toFixed(2)} millones ISK** registrado exitosamente.`);
+            await interaction.editReply(`✅ Pago de **${amountPaid.toFixed(2)} millones ISK** registrado exitosamente.`);
 
             } catch (error) {
                 console.error(error);
