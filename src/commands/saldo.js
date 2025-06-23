@@ -32,21 +32,15 @@ module.exports = {
                 );
                 
                 // 2. Guardamos el resultado en una variable con un nombre más apropiado.
-                const totalSaldo = result[0].total_saldo;
+                const totalSaldo = parseFloat(result[0].total_saldo);
 
-                // 3. ¡LA LÓGICA MÁS IMPORTANTE! Revisamos los tres posibles estados del saldo.
-                if (totalSaldo === null) {
-                    // Caso A: El piloto no está en la base de datos o no tiene outposts.
+                     if (isNaN(totalSaldo)) { // Añadimos una comprobación por si el piloto no existe
                     await interaction.editReply(`El piloto **${user.username}** no tiene registros en el sistema.`);
                 } else if (totalSaldo < 0) {
-                    // Caso B: El piloto tiene un saldo negativo (debe dinero).
-                    // Usamos Math.abs() para mostrar la deuda como un número positivo.
                     await interaction.editReply(`El piloto **${user.username}** tiene un **saldo deudor** de **${Math.abs(totalSaldo).toFixed(2)} millones ISK**.`);
                 } else if (totalSaldo > 0) {
-                    // Caso C: El piloto tiene un saldo positivo (crédito a favor).
                     await interaction.editReply(`El piloto **${user.username}** tiene un **saldo a favor** de **${totalSaldo.toFixed(2)} millones ISK**. ✨`);
                 } else {
-                    // Caso D: El saldo es exactamente cero.
                     await interaction.editReply(`El piloto **${user.username}** está a paz y salvo. ✅`);
                 }
 

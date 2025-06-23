@@ -17,6 +17,7 @@ const {
 } = require('discord.js'); // Todas las importaciones de discord.js en un solo lugar
 
 const registrarPagoCommand = require('./src/commands/registrar-pago.js');
+const reporteDeudasCommand = require('./src/commands/reporte.js');
 const pool = require('./src/db/database.js');
 
 const client = new Client({
@@ -92,12 +93,20 @@ client.on(Events.InteractionCreate, async interaction => {
 
     // 3. Manejador de Botones (para la paginación)
     else if (interaction.isButton()) {
-        if (interaction.customId.startsWith('payment_page_')) {
-            const page = parseInt(interaction.customId.split('_')[2], 10);
-            const newMenu = await registrarPagoCommand.createPilotMenu(page);
-            await interaction.update(newMenu);
-        }
+    // Lógica para los botones del menú de pago
+    if (interaction.customId.startsWith('payment_page_')) {
+        const page = parseInt(interaction.customId.split('_')[2], 10);
+        const newMenu = await registrarPagoCommand.createPilotMenu(page);
+        await interaction.update(newMenu);
     }
+    // NUEVA LÓGICA para los botones del reporte
+    else if (interaction.customId.startsWith('report_page_')) {
+        await interaction.deferUpdate(); // Confirma la interacción para que no falle
+        const page = parseInt(interaction.customId.split('_')[2], 10);
+        const newPage = await reporteDeudasCommand.generateReportPage(page);
+        await interaction.editReply(newPage);
+    }
+}
 
     // 4. Manejador de "Modals" (la ventana emergente de pago)
     else if (interaction.isModalSubmit()) {
