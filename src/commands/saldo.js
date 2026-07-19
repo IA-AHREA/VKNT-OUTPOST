@@ -1,6 +1,6 @@
-// src/commands/saldo.js (Versión Corregida)
+// src/commands/saldo.js
 const { SlashCommandBuilder } = require('discord.js');
-const pool = require('../db/database');
+const prisma = require('../db/prisma');
 
 module.exports = {
     data: new SlashCommandBuilder()
@@ -17,28 +17,28 @@ module.exports = {
     async execute(interaction) {
         if (interaction.options.getSubcommand() === 'piloto') {
             const user = interaction.options.getUser('usuario');
-            
+
             await interaction.deferReply({ ephemeral: true });
-            const connection = await pool.getConnection();
 
             try {
-                // 1. La consulta ahora suma la columna 'saldo_isk' y la nombramos 'total_saldo'.
-                const [result] = await connection.query(
-                    `SELECT SUM(o.saldo_isk) AS total_saldo
-                       FROM outposts o
-                       JOIN pilots p ON o.pilot_id = p.id
-                       WHERE p.discord_id = ?`,
-                    [user.id]
-                );
-                
-                // 2. Guardamos el resultado en una variable con un nombre más apropiado.
-                const totalSaldo = parseFloat(result[0].total_saldo);
+                const pilot = await prisma.pilot.findUnique({ where: { discordId: user.id } });
 
-                     if (isNaN(totalSaldo)) { // Añadimos una comprobación por si el piloto no existe
+                if (!pilot) {
                     await interaction.editReply(`El piloto **${user.username}** no tiene registros en el sistema.`);
-                } else if (totalSaldo < 0) {
-                    await interaction.editReply(`El piloto **${user.username}** tiene un **saldo deudor** de **${Math.abs(totalSaldo).toFixed(2)} millones ISK**.`);
-                } else if (totalSaldo > 0) {
+                    return;
+                }
+
+                const agregado = await prisma.outpost.aggregate({
+                    where: { pilotId: pilot.id, activo: true },
+                    _sum: { saldoIsk: true },
+                });
+                const totalSaldo = agregado._sum.saldoIsk;
+
+                if (totalSaldo === null) {
+                    await interaction.editReply(`El piloto **${user.username}** no tiene registros en el sistema.`);
+                } else if (totalSaldo.lt(0)) {
+                    await interaction.editReply(`El piloto **${user.username}** tiene un **saldo deudor** de **${totalSaldo.abs().toFixed(2)} millones ISK**.`);
+                } else if (totalSaldo.gt(0)) {
                     await interaction.editReply(`El piloto **${user.username}** tiene un **saldo a favor** de **${totalSaldo.toFixed(2)} millones ISK**. ✨`);
                 } else {
                     await interaction.editReply(`El piloto **${user.username}** está a paz y salvo. ✅`);
@@ -47,8 +47,6 @@ module.exports = {
             } catch (error) {
                 console.error('Error al consultar el saldo del piloto:', error);
                 await interaction.editReply('Hubo un error al intentar consultar el saldo.');
-            } finally {
-                connection.release();
             }
         }
     },

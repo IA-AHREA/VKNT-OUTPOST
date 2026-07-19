@@ -1,11 +1,13 @@
 // src/commands/cobrar.js
-const { SlashCommandBuilder } = require('discord.js');
-const pool = require('../db/database');
+const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const { Prisma } = require('@prisma/client');
+const prisma = require('../db/prisma');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('cobrar')
         .setDescription('Aplica un cargo o débito al saldo de un piloto.')
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
         .addUserOption(option =>
             option.setName('piloto')
                 .setDescription('El piloto al que se le aplicará el cargo.')
@@ -30,49 +32,53 @@ module.exports = {
         }
 
         await interaction.deferReply({ ephemeral: true });
-        const connection = await pool.getConnection();
 
         try {
-            const [pilots] = await connection.execute('SELECT id FROM pilots WHERE discord_id = ?', [user.id]);
-            if (pilots.length === 0) {
+            const pilot = await prisma.pilot.findUnique({ where: { discordId: user.id } });
+            if (!pilot) {
                 await interaction.editReply('Este piloto no está registrado en la base de datos.');
                 return;
             }
-            const pilotId = pilots[0].id;
 
-            // Para simplificar, aplicaremos el débito al primer outpost del piloto.
-            // Una lógica más avanzada podría distribuirlo, pero esto es funcional y claro.
-            const [outposts] = await connection.execute('SELECT id FROM outposts WHERE pilot_id = ? LIMIT 1', [pilotId]);
-            if (outposts.length === 0) {
+            // Para simplificar, aplicamos el débito al primer outpost del piloto.
+            const outpost = await prisma.outpost.findFirst({ where: { pilotId: pilot.id, activo: true } });
+            if (!outpost) {
                 await interaction.editReply(`El piloto ${user.username} no tiene ningún outpost para aplicarle el cargo.`);
                 return;
             }
-            const outpostId = outposts[0].id;
 
-            // La lógica clave: RESTAMOS la cantidad del saldo actual.
-            await connection.execute(
-                'UPDATE outposts SET saldo_isk = saldo_isk - ? WHERE id = ?',
-                [cantidadACobrar, outpostId]
-            );
-            
-            // Consultamos el nuevo saldo total para informarlo
-            const [result] = await connection.query(
-                'SELECT SUM(saldo_isk) AS total_saldo FROM outposts WHERE pilot_id = ?',
-                [pilotId]
-            );
-            const nuevoSaldoTotal = result[0].total_saldo;
+            const nuevoSaldo = outpost.saldoIsk.minus(new Prisma.Decimal(cantidadACobrar));
+
+            await prisma.$transaction([
+                prisma.outpost.update({ where: { id: outpost.id }, data: { saldoIsk: nuevoSaldo } }),
+                prisma.movimiento.create({
+                    data: {
+                        outpostId: outpost.id,
+                        pilotId: pilot.id,
+                        tipo: 'CARGO',
+                        monto: cantidadACobrar,
+                        saldoPost: nuevoSaldo,
+                        motivo,
+                        ejecutadoPorDiscordId: interaction.user.id,
+                    },
+                }),
+            ]);
+
+            const agregado = await prisma.outpost.aggregate({
+                where: { pilotId: pilot.id, activo: true },
+                _sum: { saldoIsk: true },
+            });
+            const nuevoSaldoTotal = agregado._sum.saldoIsk ?? new Prisma.Decimal(0);
 
             await interaction.editReply(
                 `✅ Cargo de **${cantidadACobrar.toFixed(2)} millones ISK** aplicado a **${user.username}**.\n` +
                 `**Motivo:** ${motivo}\n` +
-                `**Nuevo saldo total del piloto:** ${parseFloat(nuevoSaldoTotal).toFixed(2)}M ISK.`
+                `**Nuevo saldo total del piloto:** ${nuevoSaldoTotal.toFixed(2)}M ISK.`
             );
 
         } catch (error) {
             console.error('Error en /cobrar:', error);
             await interaction.editReply('Hubo un error al aplicar el cargo.');
-        } finally {
-            connection.release();
         }
     },
 };
