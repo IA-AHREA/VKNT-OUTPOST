@@ -1,128 +1,119 @@
-// src/commands/registrar-pago.js (versión inteligente)
-
-// Importaciones necesarias para el Modal y los menús
+// src/commands/registrar-pago.js
 const {
     SlashCommandBuilder,
+    PermissionFlagsBits,
     ActionRowBuilder,
     StringSelectMenuBuilder,
     ButtonBuilder,
     ButtonStyle,
     ModalBuilder,
     TextInputBuilder,
-    TextInputStyle
+    TextInputStyle,
 } = require('discord.js');
-const pool = require('../db/database');
+const { Prisma } = require('@prisma/client');
+const prisma = require('../db/prisma');
 
-// La función para crear el menú se queda igual
-async function createPilotMenu(page = 0) {
-    const connection = await pool.getConnection();
-    const limit = 25;
-    const offset = page * limit;
+const PILOTOS_POR_PAGINA = 25;
 
-    try {
-        const [pilots] = await connection.query(
-            `SELECT p.id, p.nombre_discord, SUM(o.deuda_isk) as total_deuda
-             FROM pilots p
-             JOIN outposts o ON p.id = o.pilot_id
-             WHERE o.deuda_isk > 0
-             GROUP BY p.id, p.nombre_discord
-             HAVING total_deuda > 0
-             ORDER BY p.nombre_discord
-             LIMIT ? OFFSET ?`,
-            [limit, offset]
-        );
+// Pilotos con saldo total negativo (deudores), ordenados por nombre.
+// El saldo se calcula sobre TODOS sus outposts activos (no solo los deudores),
+// igual que /saldo y /reporte-deudas, para evitar el bug histórico de mezclar
+// una columna "deuda_isk" que no existe con "saldo_isk".
+async function getPilotosConDeuda() {
+    const pilots = await prisma.pilot.findMany({
+        where: { activo: true, outposts: { some: { activo: true } } },
+        include: { outposts: { where: { activo: true } } },
+        orderBy: { nombreDiscord: 'asc' },
+    });
 
-        if (pilots.length === 0 && page === 0) {
-            return { content: 'No hay pilotos con deudas pendientes.', components: [], ephemeral: true };
-        }
-        
-        const selectMenu = new StringSelectMenuBuilder()
-            .setCustomId('select_pilot_payment')
-            .setPlaceholder('Selecciona un piloto para registrar un pago')
-            .addOptions(pilots.map(p => ({
-                label: p.nombre_discord,
-                description: `Deuda total: ${p.total_deuda}M ISK`,
-                value: p.id.toString(),
-            })));
-
-        const [totalPilots] = await connection.query('SELECT COUNT(DISTINCT pilot_id) as count FROM outposts WHERE deuda_isk > 0');
-        const totalPages = Math.ceil(totalPilots[0].count / limit);
-
-        const buttons = new ActionRowBuilder()
-            .addComponents(
-                new ButtonBuilder()
-                    .setCustomId(`payment_page_${page - 1}`)
-                    .setLabel('Anterior')
-                    .setStyle(ButtonStyle.Secondary)
-                    .setDisabled(page === 0),
-                new ButtonBuilder()
-                    .setCustomId(`payment_page_${page + 1}`)
-                    .setLabel('Siguiente')
-                    .setStyle(ButtonStyle.Secondary)
-                    .setDisabled(page >= totalPages - 1)
-            );
-
-        return {
-            content: `Selecciona un piloto (Página ${page + 1} de ${totalPages}):`,
-            components: [new ActionRowBuilder().addComponents(selectMenu), buttons],
-            ephemeral: true,
-        };
-
-    } finally {
-        connection.release();
-    }
+    return pilots
+        .map(p => ({
+            id: p.id,
+            nombreDiscord: p.nombreDiscord,
+            totalSaldo: p.outposts.reduce((sum, o) => sum.plus(o.saldoIsk), new Prisma.Decimal(0)),
+        }))
+        .filter(p => p.totalSaldo.lt(0));
 }
 
-// El export principal del comando
+async function createPilotMenu(page = 0) {
+    const deudores = await getPilotosConDeuda();
+
+    if (deudores.length === 0 && page === 0) {
+        return { content: 'No hay pilotos con deudas pendientes.', components: [], ephemeral: true };
+    }
+
+    const totalPages = Math.max(1, Math.ceil(deudores.length / PILOTOS_POR_PAGINA));
+    const offset = page * PILOTOS_POR_PAGINA;
+    const pilotsPagina = deudores.slice(offset, offset + PILOTOS_POR_PAGINA);
+
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('select_pilot_payment')
+        .setPlaceholder('Selecciona un piloto para registrar un pago')
+        .addOptions(pilotsPagina.map(p => ({
+            label: p.nombreDiscord,
+            description: `Deuda total: ${p.totalSaldo.abs().toFixed(2)}M ISK`,
+            value: p.id.toString(),
+        })));
+
+    const buttons = new ActionRowBuilder()
+        .addComponents(
+            new ButtonBuilder()
+                .setCustomId(`payment_page_${page - 1}`)
+                .setLabel('Anterior')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(page === 0),
+            new ButtonBuilder()
+                .setCustomId(`payment_page_${page + 1}`)
+                .setLabel('Siguiente')
+                .setStyle(ButtonStyle.Secondary)
+                .setDisabled(page >= totalPages - 1)
+        );
+
+    return {
+        content: `Selecciona un piloto (Página ${page + 1} de ${totalPages}):`,
+        components: [new ActionRowBuilder().addComponents(selectMenu), buttons],
+        ephemeral: true,
+    };
+}
+
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('registrar-pago')
         .setDescription('Registra un pago. Especifica un piloto o mira el menú interactivo.')
-        .addUserOption(option => // La opción de usuario ahora es OPCIONAL
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addUserOption(option =>
             option.setName('piloto')
                 .setDescription('El piloto al que quieres registrarle un pago directamente.')
-                .setRequired(false)), // <-- La clave es que ya no es requerido
+                .setRequired(false)),
 
     async execute(interaction) {
         const pilotoSeleccionado = interaction.options.getUser('piloto');
 
-        // CASO 1: Se especificó un piloto en el comando
         if (pilotoSeleccionado) {
-            const connection = await pool.getConnection();
-            try {
-                const [pilots] = await connection.execute('SELECT id FROM pilots WHERE discord_id = ?', [pilotoSeleccionado.id]);
+            const pilot = await prisma.pilot.findUnique({ where: { discordId: pilotoSeleccionado.id } });
 
-                if (pilots.length === 0) {
-                    await interaction.reply({ content: 'Este piloto no está registrado en la base de datos.', ephemeral: true });
-                    return;
-                }
-                const pilotId = pilots[0].id;
-
-                // Creamos y mostramos el modal directamente
-                const modal = new ModalBuilder()
-                    .setCustomId(`payment_modal_${pilotId}`)
-                    .setTitle(`Registrar Pago para ${pilotoSeleccionado.username}`);
-
-                const amountInput = new TextInputBuilder()
-                    .setCustomId('payment_amount')
-                    .setLabel("Monto a abonar (en millones ISK)")
-                    .setStyle(TextInputStyle.Short)
-                    .setPlaceholder('Ej: 150.5')
-                    .setRequired(true);
-
-                modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
-                await interaction.showModal(modal);
-
-            } finally {
-                connection.release();
+            if (!pilot) {
+                await interaction.reply({ content: 'Este piloto no está registrado en la base de datos.', ephemeral: true });
+                return;
             }
-        } 
-        // CASO 2: No se especificó un piloto, mostramos el menú
-        else {
+
+            const modal = new ModalBuilder()
+                .setCustomId(`payment_modal_${pilot.id}`)
+                .setTitle(`Registrar Pago para ${pilotoSeleccionado.username}`);
+
+            const amountInput = new TextInputBuilder()
+                .setCustomId('payment_amount')
+                .setLabel('Monto a abonar (en millones ISK)')
+                .setStyle(TextInputStyle.Short)
+                .setPlaceholder('Ej: 150.5')
+                .setRequired(true);
+
+            modal.addComponents(new ActionRowBuilder().addComponents(amountInput));
+            await interaction.showModal(modal);
+        } else {
             const menu = await createPilotMenu();
             await interaction.reply(menu);
         }
     },
-    // Exportamos la función para que el listener de paginación en index.js siga funcionando
-    createPilotMenu
+    createPilotMenu,
 };

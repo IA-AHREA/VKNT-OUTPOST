@@ -1,0 +1,75 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Pilot {
+  id            Int      @id @default(autoincrement())
+  discordId     String   @unique
+  nombreDiscord String
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  outposts    Outpost[]
+  movimientos Movimiento[]
+
+  @@map("pilots")
+}
+
+model Outpost {
+  id            Int      @id @default(autoincrement())
+  pilotId       Int
+  nombreOutpost String
+  ubicacion     String
+  saldoIsk      Decimal  @default(0) @db.Decimal(14, 2)
+  activo        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  pilot       Pilot        @relation(fields: [pilotId], references: [id])
+  movimientos Movimiento[]
+
+  @@index([pilotId])
+  @@map("outposts")
+}
+
+model Config {
+  key   String @id
+  value String
+
+  @@map("config")
+}
+
+enum TipoMovimiento {
+  CARGO
+  PAGO
+  COBRO_MENSUAL
+  REGISTRO_INICIAL
+  AJUSTE
+}
+
+model Movimiento {
+  id                    Int             @id @default(autoincrement())
+  outpostId             Int
+  pilotId               Int
+  tipo                  TipoMovimiento
+  monto                 Decimal         @db.Decimal(14, 2)
+  saldoPost             Decimal         @db.Decimal(14, 2)
+  motivo                String?
+  ejecutadoPorDiscordId String?
+  createdAt             DateTime        @default(now())
+
+  outpost Outpost @relation(fields: [outpostId], references: [id])
+  pilot   Pilot   @relation(fields: [pilotId], references: [id])
+
+  @@index([outpostId])
+  @@index([pilotId])
+  @@map("movimientos")
+}

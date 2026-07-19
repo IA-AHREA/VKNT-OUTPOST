@@ -18,7 +18,8 @@ const {
 
 const registrarPagoCommand = require('./src/commands/registrar-pago.js');
 const reporteDeudasCommand = require('./src/commands/reporte.js');
-const pool = require('./src/db/database.js');
+const prisma = require('./src/db/prisma.js');
+const { aplicarPago } = require('./src/lib/pagos.js');
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages]
@@ -121,47 +122,19 @@ client.on(Events.InteractionCreate, async interaction => {
                 return;
             }
 
-            const connection = await pool.getConnection();
             try {
-                // Lógica de pago: aplicar el monto a las deudas del piloto.
-                // Esta es una lógica simple: paga la deuda más antigua primero.
-             // Nueva lógica de pago (versión "saldo"):
-            let remainingAmount = amountPaid;
-            const [outposts] = await connection.execute(
-                'SELECT id, saldo_isk FROM outposts WHERE pilot_id = ? AND saldo_isk < 0 ORDER BY saldo_isk ASC', // Obtenemos solo los que deben
-                [pilotId]
-            );
+                const nuevoSaldoTotal = await aplicarPago(parseInt(pilotId, 10), amountPaid, {
+                    ejecutadoPorDiscordId: interaction.user.id,
+                    motivo: 'Pago vía menú interactivo',
+                });
 
-            // Si no hay deudas, el pago se convierte en saldo a favor en el primer outpost
-            if (outposts.length === 0) {
-                const [anyOutpost] = await connection.execute('SELECT id FROM outposts WHERE pilot_id = ? LIMIT 1', [pilotId]);
-                if (anyOutpost.length > 0) {
-                    await connection.execute('UPDATE outposts SET saldo_isk = saldo_isk + ? WHERE id = ?', [amountPaid, anyOutpost[0].id]);
-                }
-            } else {
-                // Si hay deudas, las pagamos
-                for (const outpost of outposts) {
-                    if (remainingAmount <= 0) break;
-                    const debtToPay = Math.abs(outpost.saldo_isk); // La deuda es el valor absoluto del saldo negativo
-                    const paymentForThisOutpost = Math.min(remainingAmount, debtToPay);
-                    const newBalance = outpost.saldo_isk + paymentForThisOutpost;
-                    await connection.execute('UPDATE outposts SET saldo_isk = ? WHERE id = ?', [newBalance, outpost.id]);
-                    remainingAmount -= paymentForThisOutpost;
-                }
-                // Si sobra dinero después de pagar todo, se añade al último outpost pagado
-                if (remainingAmount > 0) {
-                    const lastPaidOutpostId = outposts[outposts.length - 1].id;
-                    await connection.execute('UPDATE outposts SET saldo_isk = saldo_isk + ? WHERE id = ?', [remainingAmount, lastPaidOutpostId]);
-                }
-            }
-                
-            await interaction.editReply(`✅ Pago de **${amountPaid.toFixed(2)} millones ISK** registrado exitosamente.`);
-
+                await interaction.editReply(
+                    `✅ Pago de **${amountPaid.toFixed(2)} millones ISK** registrado exitosamente.\n` +
+                    `**Nuevo saldo total del piloto:** ${nuevoSaldoTotal.toFixed(2)}M ISK.`
+                );
             } catch (error) {
                 console.error(error);
                 await interaction.editReply('Hubo un error al procesar el pago en la base de datos.');
-            } finally {
-                connection.release();
             }
         }
     }

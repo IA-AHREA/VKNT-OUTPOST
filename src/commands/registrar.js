@@ -1,16 +1,17 @@
-// src/commands/registrar.js (Versión Corregida con SALDO)
-const { SlashCommandBuilder } = require('discord.js');
-const pool = require('../db/database');
+// src/commands/registrar.js
+const { SlashCommandBuilder, PermissionFlagsBits } = require('discord.js');
+const prisma = require('../db/prisma');
 
 module.exports = {
     data: new SlashCommandBuilder()
         .setName('registrar-piloto')
         .setDescription('Registra un nuevo piloto y su primer outpost con su ubicación.')
-        .addUserOption(option => 
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+        .addUserOption(option =>
             option.setName('usuario')
                 .setDescription('El usuario de Discord a registrar.')
                 .setRequired(true))
-        .addStringOption(option => 
+        .addStringOption(option =>
             option.setName('nombre_outpost')
                 .setDescription('El nombre del primer outpost.')
                 .setRequired(true))
@@ -22,48 +23,56 @@ module.exports = {
         const user = interaction.options.getUser('usuario');
         const nombreOutpost = interaction.options.getString('nombre_outpost');
         const ubicacion = interaction.options.getString('ubicacion');
-        
+
         await interaction.deferReply({ ephemeral: true });
-        const connection = await pool.getConnection();
+
         try {
-            await connection.beginTransaction();
+            const config = await prisma.config.findUnique({ where: { key: 'TARIFA_MENSUAL_OUTPOST' } });
+            const deudaInicial = config ? parseFloat(config.value) : 0;
 
-            let [pilots] = await connection.execute('SELECT id FROM pilots WHERE discord_id = ?', [user.id]);
-            let pilotId;
-
-            if (pilots.length === 0) {
-                const [result] = await connection.execute(
-                    'INSERT INTO pilots (discord_id, nombre_discord) VALUES (?, ?)',
-                    [user.id, user.username]
-                );
-                pilotId = result.insertId;
-            } else {
-                pilotId = pilots[0].id;
+            if (!deudaInicial) {
+                await interaction.editReply('No se ha configurado la tarifa mensual (`TARIFA_MENSUAL_OUTPOST` en la tabla `config`).');
+                return;
             }
-            
-            const [[config]] = await connection.execute("SELECT config_value FROM config WHERE config_key = 'TARIFA_MENSUAL_OUTPOST'");
-            const deudaInicial = parseFloat(config.config_value);
 
-            // =====================================================================
-            // ¡AQUÍ ESTÁ LA CORRECCIÓN!
-            // Usamos la columna 'saldo_isk' y guardamos la deuda como un número negativo.
-            // =====================================================================
-            await connection.execute(
-                'INSERT INTO outposts (pilot_id, nombre_outpost, ubicacion, saldo_isk) VALUES (?, ?, ?, ?)',
-                [pilotId, nombreOutpost, ubicacion, -deudaInicial] // <-- Cambio clave aquí
-            );
+            const nuevoSaldo = -deudaInicial;
 
-            await connection.commit();
+            await prisma.$transaction(async (tx) => {
+                const pilot = await tx.pilot.upsert({
+                    where: { discordId: user.id },
+                    update: {},
+                    create: { discordId: user.id, nombreDiscord: user.username },
+                });
+
+                const outpost = await tx.outpost.create({
+                    data: {
+                        pilotId: pilot.id,
+                        nombreOutpost,
+                        ubicacion,
+                        saldoIsk: nuevoSaldo,
+                    },
+                });
+
+                await tx.movimiento.create({
+                    data: {
+                        outpostId: outpost.id,
+                        pilotId: pilot.id,
+                        tipo: 'REGISTRO_INICIAL',
+                        monto: deudaInicial,
+                        saldoPost: nuevoSaldo,
+                        motivo: 'Alta de outpost',
+                        ejecutadoPorDiscordId: interaction.user.id,
+                    },
+                });
+            });
+
             await interaction.editReply({
                 content: `✅ Piloto **${user.username}** registrado con el outpost **${nombreOutpost}** en **${ubicacion}**.\nSe ha asignado un saldo inicial de **-${deudaInicial.toFixed(2)}M ISK**.`,
-                ephemeral: true
+                ephemeral: true,
             });
         } catch (error) {
-            await connection.rollback();
-            console.error(error);
+            console.error('Error en /registrar-piloto:', error);
             await interaction.editReply({ content: 'Hubo un error al registrar el piloto.', ephemeral: true });
-        } finally {
-            connection.release();
         }
     },
 };

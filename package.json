@@ -2,17 +2,27 @@
   "name": "outpost_vknt",
   "version": "1.0.0",
   "main": "index.js",
- "scripts": {
-  "start": "node index.js",
-  "test": "echo \"Error: no test specified\" && exit 1"
-},
+  "scripts": {
+    "start": "node index.js",
+    "deploy-commands": "node deploy-commands.js",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate deploy",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "migrate:mysql": "node scripts/migrate-from-mysql.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@prisma/client": "^5.22.0",
     "discord.js": "^14.20.0",
-    "dotenv": "^16.5.0",
-    "mysql2": "^3.14.1"
+    "dotenv": "^16.5.0"
+  },
+  "devDependencies": {
+    "mysql2": "^3.14.1",
+    "prisma": "^5.22.0"
   }
 }
